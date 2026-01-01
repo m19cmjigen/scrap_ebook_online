@@ -41,3 +41,8 @@ playwright/.cache/
 # Session data
 session/
 cookies.json
+
+# Debug/Test files
+*.png
+debug-login.ts
+test-login.ts

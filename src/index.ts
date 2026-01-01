@@ -60,6 +60,9 @@ async function main() {
     const browser = await chromium.launch({
       headless: cfg.headless,
       slowMo: parseInt(process.env.SLOW_MO || '0', 10),
+      args: [
+        '--disable-blink-features=AutomationControlled',
+      ],
     });
 
     const auth = new OReillyAuth(browser);

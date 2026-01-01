@@ -19,8 +19,14 @@ export class OReillyAuth {
   async login(config: AuthConfig): Promise<Page> {
     Logger.info('Starting O\'Reilly login process...');
 
-    // Create a new browser context
-    this.context = await this.browser.newContext();
+    // Create a new browser context with realistic user agent
+    this.context = await this.browser.newContext({
+      userAgent:
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      viewport: { width: 1920, height: 1080 },
+      locale: 'en-US',
+      timezoneId: 'America/New_York',
+    });
     this.page = await this.context.newPage();
 
     try {
@@ -65,41 +71,103 @@ export class OReillyAuth {
       await this.page.waitForSelector('input[type="password"]', { timeout: 10000 });
 
       // Fill in password
-      await this.page.fill('input[type="password"]', config.password);
+      const passwordField = await this.page.$('input[type="password"]');
+      if (!passwordField) {
+        throw new Error('Password field not found');
+      }
+      await passwordField.fill(config.password);
       Logger.info('Password entered');
 
-      // Find and click the sign in/submit button
+      // Try submitting with Enter key first (more reliable than clicking)
+      Logger.info('Attempting to submit with Enter key...');
+
+      const loginResponsePromise = this.page.waitForResponse(
+        (response) => response.url().includes('/auth/login'),
+        { timeout: 10000 }
+      ).catch(() => null);
+
+      await passwordField.press('Enter');
+
+      // Wait a moment to see if Enter worked
+      const loginResponse = await Promise.race([
+        loginResponsePromise,
+        this.page.waitForTimeout(2000).then(() => null),
+      ]);
+
+      if (loginResponse) {
+        Logger.info('Login API called via Enter key');
+        await this.page.waitForTimeout(3000);
+
+        const isAuth = await this.isAuthenticated();
+        if (isAuth) {
+          Logger.info('Successfully logged in to O\'Reilly');
+          return this.page;
+        }
+      }
+
+      Logger.warn('Enter key did not work, trying to click button...');
+
+      // Find and click the sign in/submit button (must be visible)
       const signInSelectors = [
-        'button[type="submit"]',
-        'button:has-text("Sign In")',
-        'button:has-text("Log In")',
-        'button:has-text("Continue")',
-        'input[type="submit"]',
+        'button:has-text("Sign in"):visible',
+        'button:has-text("Sign In"):visible',
+        'button:has-text("Log In"):visible',
+        'button:has-text("Continue"):visible',
+        'button[type="submit"]:visible',
+        'input[type="submit"]:visible',
       ];
 
       let signInButton = null;
       for (const selector of signInSelectors) {
-        signInButton = await this.page.$(selector);
-        if (signInButton) {
-          Logger.info(`Found sign in button with selector: ${selector}`);
+        const btn = await this.page.$(selector);
+        if (btn && (await btn.isVisible())) {
+          signInButton = btn;
+          Logger.info(`Found visible sign in button with selector: ${selector}`);
           break;
         }
       }
 
+      // Fallback: find any visible submit button
       if (!signInButton) {
-        throw new Error('Could not find sign in button');
+        Logger.warn('Could not find button with standard selectors, trying visible submit buttons...');
+        const allButtons = await this.page.$$('button');
+        for (const btn of allButtons) {
+          const isVisible = await btn.isVisible();
+          const text = await btn.textContent();
+          if (isVisible && text && (text.toLowerCase().includes('sign') || text.toLowerCase().includes('log'))) {
+            signInButton = btn;
+            Logger.info(`Found visible button with text: ${text.trim()}`);
+            break;
+          }
+        }
+      }
+
+      if (!signInButton) {
+        throw new Error('Could not find visible sign in button');
       }
 
       Logger.info('Clicking sign in button...');
-      await Promise.all([
-        this.page.waitForNavigation({ waitUntil: 'load', timeout: 30000 }).catch(() => {
-          Logger.warn('Navigation timeout after login, but continuing...');
-        }),
-        signInButton.click(),
+
+      // Wait for the login API call to complete
+      const loginPromise = this.page.waitForResponse(
+        (response) => response.url().includes('/auth/login') && response.status() === 200,
+        { timeout: 30000 }
+      ).catch(() => {
+        Logger.warn('Login API response timeout, checking authentication anyway...');
+        return null;
+      });
+
+      await signInButton.click();
+
+      // Wait for either the API response or navigation
+      await Promise.race([
+        loginPromise,
+        this.page.waitForNavigation({ waitUntil: 'load', timeout: 10000 }).catch(() => null),
+        this.page.waitForTimeout(5000),
       ]);
 
-      // Wait for login to complete
-      await this.page.waitForTimeout(3000);
+      // Wait a bit more for any redirects or JavaScript to complete
+      await this.page.waitForTimeout(2000);
 
       // Check if login was successful
       const isAuth = await this.isAuthenticated();
@@ -176,7 +244,13 @@ export class OReillyAuth {
 
   async loadCookies(path: string): Promise<void> {
     if (!this.context) {
-      this.context = await this.browser.newContext();
+      this.context = await this.browser.newContext({
+        userAgent:
+          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        viewport: { width: 1920, height: 1080 },
+        locale: 'en-US',
+        timezoneId: 'America/New_York',
+      });
     }
 
     try {
@@ -193,7 +267,13 @@ export class OReillyAuth {
   async getPage(): Promise<Page> {
     if (!this.page) {
       if (!this.context) {
-        this.context = await this.browser.newContext();
+        this.context = await this.browser.newContext({
+          userAgent:
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          viewport: { width: 1920, height: 1080 },
+          locale: 'en-US',
+          timezoneId: 'America/New_York',
+        });
       }
       this.page = await this.context.newPage();
     }

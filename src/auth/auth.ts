@@ -24,9 +24,9 @@ export class OReillyAuth {
     this.page = await this.context.newPage();
 
     try {
-      // Navigate to O'Reilly Japan login page
+      // Navigate to O'Reilly login page
       Logger.info('Navigating to login page...');
-      await this.page.goto('https://www.oreilly.co.jp/ebook/login', {
+      await this.page.goto('https://www.oreilly.com/member/login/', {
         waitUntil: 'networkidle',
       });
 

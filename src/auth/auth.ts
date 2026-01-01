@@ -24,29 +24,102 @@ export class OReillyAuth {
     this.page = await this.context.newPage();
 
     try {
-      // Navigate to O'Reilly login page
+      // Navigate to O'Reilly Japan login page
       Logger.info('Navigating to login page...');
-      await this.page.goto('https://learning.oreilly.com/accounts/login/', {
+      await this.page.goto('https://www.oreilly.co.jp/ebook/login', {
         waitUntil: 'networkidle',
       });
 
-      // Wait for the email input field
-      await this.page.waitForSelector('input[type="email"]', { timeout: 10000 });
+      // Wait for the page to load
+      await this.page.waitForLoadState('domcontentloaded');
 
-      // Fill in email
+      // Try multiple selectors for email/username field
+      const emailSelectors = [
+        'input[type="email"]',
+        'input[name="email"]',
+        'input[name="username"]',
+        'input[id="email"]',
+        'input[id="username"]',
+        '#login_id',
+        '#email',
+      ];
+
+      let emailInput = null;
+      for (const selector of emailSelectors) {
+        emailInput = await this.page.$(selector);
+        if (emailInput) {
+          Logger.info(`Found email input with selector: ${selector}`);
+          break;
+        }
+      }
+
+      if (!emailInput) {
+        throw new Error('Could not find email/username input field');
+      }
+
+      // Fill in email/username
       Logger.info('Entering email...');
-      await this.page.fill('input[type="email"]', config.email);
+      await emailInput.fill(config.email);
+
+      // Try multiple selectors for password field
+      const passwordSelectors = [
+        'input[type="password"]',
+        'input[name="password"]',
+        'input[id="password"]',
+        '#login_password',
+      ];
+
+      let passwordInput = null;
+      for (const selector of passwordSelectors) {
+        passwordInput = await this.page.$(selector);
+        if (passwordInput) {
+          Logger.info(`Found password input with selector: ${selector}`);
+          break;
+        }
+      }
+
+      if (!passwordInput) {
+        throw new Error('Could not find password input field');
+      }
 
       // Fill in password
       Logger.info('Entering password...');
-      await this.page.fill('input[type="password"]', config.password);
+      await passwordInput.fill(config.password);
+
+      // Try multiple selectors for submit button
+      const submitSelectors = [
+        'button[type="submit"]',
+        'input[type="submit"]',
+        'button:has-text("ログイン")',
+        'input[value="ログイン"]',
+        '.login-button',
+        '#login_button',
+      ];
+
+      let submitButton = null;
+      for (const selector of submitSelectors) {
+        submitButton = await this.page.$(selector);
+        if (submitButton) {
+          Logger.info(`Found submit button with selector: ${selector}`);
+          break;
+        }
+      }
+
+      if (!submitButton) {
+        throw new Error('Could not find login button');
+      }
 
       // Click the sign in button
-      Logger.info('Clicking sign in button...');
-      await this.page.click('button[type="submit"]');
+      Logger.info('Clicking login button...');
+      await Promise.all([
+        this.page.waitForNavigation({ waitUntil: 'networkidle', timeout: 30000 }).catch(() => {
+          Logger.warn('Navigation timeout, but continuing...');
+        }),
+        submitButton.click(),
+      ]);
 
-      // Wait for navigation after login
-      await this.page.waitForNavigation({ waitUntil: 'networkidle', timeout: 30000 });
+      // Wait a bit for any redirects
+      await this.page.waitForTimeout(2000);
 
       // Check if login was successful
       const isAuth = await this.isAuthenticated();
@@ -72,13 +145,34 @@ export class OReillyAuth {
       const url = this.page.url();
 
       // If we're still on the login page, authentication failed
-      if (url.includes('/accounts/login/')) {
+      if (url.includes('/login') || url.includes('/signin')) {
         return false;
       }
 
+      // If we're on the ebook page, we're likely authenticated
+      if (url.includes('/ebook/') || url.includes('learning.oreilly.com')) {
+        return true;
+      }
+
       // Check for user menu or other authenticated indicators
-      const userMenu = await this.page.$('[data-testid="user-menu"], .user-menu, nav[aria-label="User"]');
-      return userMenu !== null;
+      const authIndicators = [
+        '[data-testid="user-menu"]',
+        '.user-menu',
+        'nav[aria-label="User"]',
+        '.logout',
+        'a[href*="logout"]',
+        '.user-info',
+      ];
+
+      for (const selector of authIndicators) {
+        const element = await this.page.$(selector);
+        if (element) {
+          return true;
+        }
+      }
+
+      // If we got here and we're not on the login page, assume authenticated
+      return !url.includes('/login');
     } catch (error) {
       Logger.error('Error checking authentication status:', error);
       return false;

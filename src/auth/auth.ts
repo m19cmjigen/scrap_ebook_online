@@ -27,99 +27,79 @@ export class OReillyAuth {
       // Navigate to O'Reilly login page
       Logger.info('Navigating to login page...');
       await this.page.goto('https://www.oreilly.com/member/login/', {
-        waitUntil: 'networkidle',
+        waitUntil: 'load',
+        timeout: 15000,
+      }).catch(() => {
+        Logger.warn('Navigation timeout, but continuing...');
       });
 
-      // Wait for the page to load
-      await this.page.waitForLoadState('domcontentloaded');
+      await this.page.waitForTimeout(2000);
 
-      // Try multiple selectors for email/username field
-      const emailSelectors = [
-        'input[type="email"]',
-        'input[name="email"]',
-        'input[name="username"]',
-        'input[id="email"]',
-        'input[id="username"]',
-        '#login_id',
-        '#email',
-      ];
+      // STEP 1: Enter email and click Continue
+      Logger.info('Step 1: Entering email address...');
 
-      let emailInput = null;
-      for (const selector of emailSelectors) {
-        emailInput = await this.page.$(selector);
-        if (emailInput) {
-          Logger.info(`Found email input with selector: ${selector}`);
-          break;
-        }
+      // Wait for email input
+      await this.page.waitForSelector('input[type="email"], input#email', { timeout: 10000 });
+
+      // Fill in email
+      await this.page.fill('input#email', config.email);
+      Logger.info('Email entered');
+
+      // Click Continue button
+      Logger.info('Clicking Continue button...');
+      const continueButton = await this.page.$('button:has-text("Continue")');
+      if (!continueButton) {
+        throw new Error('Could not find Continue button');
       }
 
-      if (!emailInput) {
-        throw new Error('Could not find email/username input field');
-      }
+      await continueButton.click();
 
-      // Fill in email/username
-      Logger.info('Entering email...');
-      await emailInput.fill(config.email);
+      // Wait for password page to load
+      Logger.info('Waiting for password page...');
+      await this.page.waitForTimeout(2000);
 
-      // Try multiple selectors for password field
-      const passwordSelectors = [
-        'input[type="password"]',
-        'input[name="password"]',
-        'input[id="password"]',
-        '#login_password',
-      ];
+      // STEP 2: Enter password and submit
+      Logger.info('Step 2: Entering password...');
 
-      let passwordInput = null;
-      for (const selector of passwordSelectors) {
-        passwordInput = await this.page.$(selector);
-        if (passwordInput) {
-          Logger.info(`Found password input with selector: ${selector}`);
-          break;
-        }
-      }
-
-      if (!passwordInput) {
-        throw new Error('Could not find password input field');
-      }
+      // Wait for password field to appear
+      await this.page.waitForSelector('input[type="password"]', { timeout: 10000 });
 
       // Fill in password
-      Logger.info('Entering password...');
-      await passwordInput.fill(config.password);
+      await this.page.fill('input[type="password"]', config.password);
+      Logger.info('Password entered');
 
-      // Try multiple selectors for submit button
-      const submitSelectors = [
+      // Find and click the sign in/submit button
+      const signInSelectors = [
         'button[type="submit"]',
+        'button:has-text("Sign In")',
+        'button:has-text("Log In")',
+        'button:has-text("Continue")',
         'input[type="submit"]',
-        'button:has-text("ログイン")',
-        'input[value="ログイン"]',
-        '.login-button',
-        '#login_button',
       ];
 
-      let submitButton = null;
-      for (const selector of submitSelectors) {
-        submitButton = await this.page.$(selector);
-        if (submitButton) {
-          Logger.info(`Found submit button with selector: ${selector}`);
+      let signInButton = null;
+      for (const selector of signInSelectors) {
+        signInButton = await this.page.$(selector);
+        if (signInButton) {
+          Logger.info(`Found sign in button with selector: ${selector}`);
           break;
         }
       }
 
-      if (!submitButton) {
-        throw new Error('Could not find login button');
+      if (!signInButton) {
+        throw new Error('Could not find sign in button');
       }
 
-      // Click the sign in button
-      Logger.info('Clicking login button...');
+      Logger.info('Clicking sign in button...');
       await Promise.all([
-        this.page.waitForNavigation({ waitUntil: 'networkidle', timeout: 30000 }).catch(() => {
-          Logger.warn('Navigation timeout, but continuing...');
+        this.page.waitForNavigation({ waitUntil: 'load', timeout: 30000 }).catch(() => {
+          Logger.warn('Navigation timeout after login, but continuing...');
         }),
-        submitButton.click(),
+        signInButton.click(),
       ]);
 
-      // Wait a bit for any redirects
-      await this.page.waitForTimeout(2000);
+      // Wait for login to complete
+      await this.page.waitForTimeout(3000);
 
       // Check if login was successful
       const isAuth = await this.isAuthenticated();

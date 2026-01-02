@@ -44,10 +44,13 @@ cookies.json
 
 # Debug/Test files
 *.png
-debug-login.ts
-test-login.ts
-debug-book-page.ts
+debug-*.ts
+test-*.ts
+cleanup-*.ts
 
-# Data and cache
+# Data storage and cache
 data/
 logs/
+
+# Manifest
+manifest.json

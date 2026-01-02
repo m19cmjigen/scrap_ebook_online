@@ -1,5 +1,6 @@
 import { promises as fs } from 'fs';
 import path from 'path';
+import type { Page } from 'playwright';
 import { CacheManager } from './cache-manager.js';
 import { ManifestManager, BookManifestEntry } from './manifest-manager.js';
 import { PDFGenerator } from '../pdf/pdf-generator.js';
@@ -74,7 +75,7 @@ export class StorageCoordinator {
   /**
    * Save complete book (generate PDF and update manifest)
    */
-  async saveBook(book: Book, chapterContents: Map<number, string>): Promise<BookManifestEntry> {
+  async saveBook(page: Page, book: Book, chapterContents: Map<number, string>): Promise<BookManifestEntry> {
     Logger.info('Saving book to storage...');
 
     // Create book directory
@@ -87,7 +88,7 @@ export class StorageCoordinator {
     const pdfFilename = `${sanitizedTitle}.pdf`;
     const pdfPath = path.join(bookDir, pdfFilename);
 
-    await this.pdfGenerator.generateBookPDF(book, chapterContents, pdfPath);
+    await this.pdfGenerator.generateBookPDF(page, book, chapterContents, bookDir);
     Logger.info(`PDF generated: ${pdfPath}`);
 
     // Save metadata

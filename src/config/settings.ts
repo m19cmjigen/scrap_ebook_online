@@ -1,4 +1,5 @@
 import { config as dotenvConfig } from 'dotenv';
+import { readFileSync, existsSync } from 'fs';
 
 dotenvConfig();
 
@@ -7,6 +8,7 @@ export interface ScraperConfig {
   maxRetries: number; // retry attempts
   retryBackoffBase: number; // exponential backoff base (seconds)
   timeout: number; // request timeout (ms)
+  bookUrls: string[]; // URLs to scrape
 }
 
 export interface StorageConfig {
@@ -32,6 +34,54 @@ export interface Config {
 }
 
 /**
+ * Load book URLs from environment variables or file
+ */
+function loadBookUrls(): string[] {
+  // Priority: BOOK_URLS_FILE > BOOK_URLS > BOOK_URL (legacy)
+
+  // Option 1: Load from file
+  if (process.env.BOOK_URLS_FILE) {
+    const filePath = process.env.BOOK_URLS_FILE;
+    if (!existsSync(filePath)) {
+      throw new Error(`BOOK_URLS_FILE not found: ${filePath}`);
+    }
+
+    const content = readFileSync(filePath, 'utf-8');
+    const urls = content
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line && !line.startsWith('#')); // Skip empty lines and comments
+
+    if (urls.length === 0) {
+      throw new Error(`BOOK_URLS_FILE is empty: ${filePath}`);
+    }
+
+    return urls;
+  }
+
+  // Option 2: Load from comma-separated env var
+  if (process.env.BOOK_URLS) {
+    const urls = process.env.BOOK_URLS
+      .split(',')
+      .map(url => url.trim())
+      .filter(url => url);
+
+    if (urls.length === 0) {
+      throw new Error('BOOK_URLS is empty');
+    }
+
+    return urls;
+  }
+
+  // Option 3: Legacy single URL
+  if (process.env.BOOK_URL) {
+    return [process.env.BOOK_URL];
+  }
+
+  throw new Error('No book URLs specified. Set BOOK_URL, BOOK_URLS, or BOOK_URLS_FILE');
+}
+
+/**
  * Load configuration from environment variables with sensible defaults
  */
 export function loadConfig(): Config {
@@ -43,6 +93,7 @@ export function loadConfig(): Config {
       maxRetries: parseInt(process.env.MAX_RETRIES || '3', 10),
       retryBackoffBase: parseInt(process.env.RETRY_BACKOFF_BASE || '2', 10),
       timeout: parseInt(process.env.REQUEST_TIMEOUT || '30000', 10),
+      bookUrls: loadBookUrls(),
     },
     storage: {
       dataDir,

@@ -134,7 +134,11 @@ export class BookScraper {
 
       if (tocElement && baseUrl) {
         // Extract all .xhtml links from TOC (front matter, parts, etc.)
-        const chapterLinks = await tocElement.$$('a[href$=".xhtml"]:not([href*="#"])');
+        // Get all links that end with .xhtml
+        const chapterLinks = await tocElement.$$('a[href*=".xhtml"]');
+
+        // Track unique chapter URLs (without anchors)
+        const seenUrls = new Set<string>();
 
         for (let i = 0; i < chapterLinks.length; i++) {
           const link = chapterLinks[i];
@@ -142,7 +146,24 @@ export class BookScraper {
           const text = await link.textContent();
 
           if (href && text) {
-            const fullUrl = href.startsWith('http') ? href : `https://learning.oreilly.com${href}`;
+            // Remove anchor from URL (everything after #)
+            const urlWithoutAnchor = href.split('#')[0];
+
+            // Skip if this is just an anchor (no file part)
+            if (!urlWithoutAnchor || !urlWithoutAnchor.includes('.xhtml')) {
+              continue;
+            }
+
+            const fullUrl = urlWithoutAnchor.startsWith('http')
+              ? urlWithoutAnchor
+              : `https://learning.oreilly.com${urlWithoutAnchor}`;
+
+            // Skip duplicates
+            if (seenUrls.has(fullUrl)) {
+              continue;
+            }
+            seenUrls.add(fullUrl);
+
             chapters.push({
               title: text.trim(),
               url: fullUrl,

@@ -46,11 +46,25 @@ export class PDFGenerator {
     Logger.info(`Generating PDF from HTML: ${options.outputPath}`);
 
     try {
-      // Create a complete HTML document with styling
-      const styledHTML = this.wrapHTMLWithStyles(html, title);
+      // Fix image URLs to be absolute
+      const fixedHTML = this.fixImageURLs(html);
 
-      // Set the content
-      await page.setContent(styledHTML, { waitUntil: 'networkidle' });
+      // Create a complete HTML document with styling
+      const styledHTML = this.wrapHTMLWithStyles(fixedHTML, title);
+
+      // Set the content and wait for network to be idle (all resources loaded)
+      await page.setContent(styledHTML, { waitUntil: 'load' });
+
+      // Wait for network idle to ensure all images are loaded
+      try {
+        await page.waitForLoadState('networkidle', { timeout: 10000 });
+      } catch (error) {
+        // If timeout, continue anyway - some images might not load
+        Logger.warn('Network idle timeout - some images may not have loaded');
+      }
+
+      // Additional wait to ensure rendering is complete
+      await page.waitForTimeout(1500);
 
       // Generate PDF
       await this.generateFromPage(page, options);
@@ -107,6 +121,30 @@ export class PDFGenerator {
     return outputPath;
   }
 
+  private fixImageURLs(html: string): string {
+    // Convert relative image URLs to absolute URLs for O'Reilly
+    return html.replace(
+      /<img([^>]*?)src=["'](?!https?:\/\/)([^"']+)["']/gi,
+      (_match, attrs, src) => {
+        // Handle different types of relative URLs
+        let absoluteURL = src;
+
+        if (src.startsWith('/')) {
+          // Absolute path from domain root
+          absoluteURL = `https://learning.oreilly.com${src}`;
+        } else if (src.startsWith('../')) {
+          // Relative path going up directories - best effort
+          absoluteURL = `https://learning.oreilly.com/library/view/${src.replace(/\.\.\//g, '')}`;
+        } else if (!src.startsWith('data:')) {
+          // Relative path from current directory
+          absoluteURL = `https://learning.oreilly.com/library/view/${src}`;
+        }
+
+        return `<img${attrs}src="${absoluteURL}"`;
+      }
+    );
+  }
+
   private wrapHTMLWithStyles(content: string, title?: string): string {
     return `
       <!DOCTYPE html>
@@ -153,6 +191,16 @@ export class PDFGenerator {
             img {
               max-width: 100%;
               height: auto;
+              display: block;
+              margin: 1em auto;
+              page-break-inside: avoid;
+            }
+            figure {
+              page-break-inside: avoid;
+              margin: 1em 0;
+            }
+            figure img {
+              margin: 0 auto;
             }
             table {
               border-collapse: collapse;

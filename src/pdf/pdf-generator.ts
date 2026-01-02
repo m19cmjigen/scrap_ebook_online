@@ -1,6 +1,7 @@
 import { Page } from 'playwright';
 import { promises as fs } from 'fs';
 import path from 'path';
+import { PDFDocument } from 'pdf-lib';
 import { Logger } from '../utils/logger.js';
 import { Book, Chapter } from '../scrapers/book-scraper.js';
 
@@ -46,11 +47,25 @@ export class PDFGenerator {
     Logger.info(`Generating PDF from HTML: ${options.outputPath}`);
 
     try {
-      // Create a complete HTML document with styling
-      const styledHTML = this.wrapHTMLWithStyles(html, title);
+      // Fix image URLs to be absolute
+      const fixedHTML = this.fixImageURLs(html);
 
-      // Set the content
-      await page.setContent(styledHTML, { waitUntil: 'networkidle' });
+      // Create a complete HTML document with styling
+      const styledHTML = this.wrapHTMLWithStyles(fixedHTML, title);
+
+      // Set the content and wait for network to be idle (all resources loaded)
+      await page.setContent(styledHTML, { waitUntil: 'load' });
+
+      // Wait for network idle to ensure all images are loaded
+      try {
+        await page.waitForLoadState('networkidle', { timeout: 10000 });
+      } catch (error) {
+        // If timeout, continue anyway - some images might not load
+        Logger.warn('Network idle timeout - some images may not have loaded');
+      }
+
+      // Additional wait to ensure rendering is complete
+      await page.waitForTimeout(1500);
 
       // Generate PDF
       await this.generateFromPage(page, options);
@@ -63,7 +78,7 @@ export class PDFGenerator {
   async generateBookPDF(
     page: Page,
     book: Book,
-    chapterContents: Map<number, string>,
+    _chapterContents: Map<number, string>,
     outputDir: string,
   ): Promise<string> {
     Logger.info(`Generating book PDF for: ${book.title}`);
@@ -80,31 +95,103 @@ export class PDFGenerator {
     const filename = `${sanitizedTitle}_${timestamp}.pdf`;
     const outputPath = path.join(outputDir, filename);
 
-    // Combine all chapters into one HTML document
-    let combinedHTML = '';
+    // Generate PDF by navigating to each chapter page directly
+    // This preserves authentication and loads all images correctly
+    Logger.info('Generating PDF from live pages (to preserve image authentication)...');
+
+    const pdfPages: Buffer[] = [];
 
     for (const chapter of book.chapters) {
-      const content = chapterContents.get(chapter.index);
-      if (content) {
-        combinedHTML += `
-          <div class="chapter">
-            <h1 class="chapter-title">${chapter.title}</h1>
-            <div class="chapter-content">
-              ${content}
-            </div>
-          </div>
-          <div class="page-break"></div>
-        `;
+      Logger.info(`Rendering chapter ${chapter.index + 1}/${book.chapters.length}: ${chapter.title}`);
+
+      try {
+        // Navigate to the actual chapter page
+        await page.goto(chapter.url, { waitUntil: 'load', timeout: 30000 });
+
+        // Wait for images to load
+        try {
+          await page.waitForLoadState('networkidle', { timeout: 5000 });
+        } catch (e) {
+          // Continue even if timeout
+        }
+
+        // Small delay for rendering
+        await page.waitForTimeout(500);
+
+        // Generate PDF for this chapter
+        const chapterPDF = await page.pdf({
+          format: 'A4',
+          margin: {
+            top: '20mm',
+            right: '20mm',
+            bottom: '20mm',
+            left: '20mm',
+          },
+          printBackground: true,
+          preferCSSPageSize: false,
+        });
+
+        pdfPages.push(chapterPDF);
+      } catch (error) {
+        Logger.warn(`Failed to render chapter ${chapter.index}: ${chapter.title}`);
+        // Continue with next chapter
       }
     }
 
-    // Create the full document with title page
-    const fullHTML = this.createFullDocument(book, combinedHTML);
-
-    // Generate the PDF
-    await this.generateFromHTML(page, fullHTML, { outputPath }, book.title);
+    // Merge all PDFs into one
+    if (pdfPages.length > 0) {
+      Logger.info(`Merging ${pdfPages.length} chapter PDFs into single document...`);
+      const mergedPdf = await this.mergePDFs(pdfPages);
+      await fs.writeFile(outputPath, mergedPdf);
+      Logger.info(`PDF generated successfully with ${pdfPages.length} chapters`);
+    } else {
+      throw new Error('No chapters were successfully rendered');
+    }
 
     return outputPath;
+  }
+
+  private async mergePDFs(pdfBuffers: Buffer[]): Promise<Uint8Array> {
+    const mergedPdf = await PDFDocument.create();
+
+    for (const pdfBuffer of pdfBuffers) {
+      try {
+        const pdf = await PDFDocument.load(pdfBuffer);
+        const copiedPages = await mergedPdf.copyPages(pdf, pdf.getPageIndices());
+        copiedPages.forEach((page) => {
+          mergedPdf.addPage(page);
+        });
+      } catch (error) {
+        Logger.warn('Failed to merge a PDF page');
+        // Continue with other pages
+      }
+    }
+
+    return await mergedPdf.save();
+  }
+
+  private fixImageURLs(html: string): string {
+    // Convert relative image URLs to absolute URLs for O'Reilly
+    return html.replace(
+      /<img([^>]*?)src=["'](?!https?:\/\/)([^"']+)["']/gi,
+      (_match, attrs, src) => {
+        // Handle different types of relative URLs
+        let absoluteURL = src;
+
+        if (src.startsWith('/')) {
+          // Absolute path from domain root
+          absoluteURL = `https://learning.oreilly.com${src}`;
+        } else if (src.startsWith('../')) {
+          // Relative path going up directories - best effort
+          absoluteURL = `https://learning.oreilly.com/library/view/${src.replace(/\.\.\//g, '')}`;
+        } else if (!src.startsWith('data:')) {
+          // Relative path from current directory
+          absoluteURL = `https://learning.oreilly.com/library/view/${src}`;
+        }
+
+        return `<img${attrs}src="${absoluteURL}"`;
+      }
+    );
   }
 
   private wrapHTMLWithStyles(content: string, title?: string): string {
@@ -153,6 +240,16 @@ export class PDFGenerator {
             img {
               max-width: 100%;
               height: auto;
+              display: block;
+              margin: 1em auto;
+              page-break-inside: avoid;
+            }
+            figure {
+              page-break-inside: avoid;
+              margin: 1em 0;
+            }
+            figure img {
+              margin: 0 auto;
             }
             table {
               border-collapse: collapse;

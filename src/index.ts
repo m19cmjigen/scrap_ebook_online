@@ -78,7 +78,8 @@ async function main() {
         Logger.info('Attempting to load saved session...');
         await auth.loadCookies(cfg.cookiesPath);
         const page = await auth.getPage();
-        await page.goto(cfg.bookUrl, { waitUntil: 'networkidle' });
+        await page.goto(cfg.bookUrl, { waitUntil: 'domcontentloaded' });
+        await page.waitForSelector('body', { timeout: 10000 });
         authenticated = await auth.isAuthenticated();
 
         if (authenticated) {

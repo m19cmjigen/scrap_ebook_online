@@ -26,7 +26,8 @@ export class BookScraper {
   async getBook(bookUrl: string): Promise<Book> {
     Logger.info(`Fetching book metadata from: ${bookUrl}`);
 
-    await this.page.goto(bookUrl, { waitUntil: 'networkidle' });
+    await this.page.goto(bookUrl, { waitUntil: 'domcontentloaded' });
+    await this.page.waitForSelector('body', { timeout: 10000 });
 
     // Extract book ID from URL
     const urlParts = bookUrl.split('/');
@@ -120,13 +121,14 @@ export class BookScraper {
             index: 0,
           });
 
-          // Try to find next chapter links
+          // Try to find next chapter links using O'Reilly's status bar navigation
           let hasNext = true;
           let index = 1;
 
           while (hasNext && index < 1000) {
             // Safety limit
-            const nextButton = await this.page.$('a[aria-label="Next"], a[title="Next"],.next-chapter');
+            // O'Reilly uses data-testid="statusBarNext" for next navigation
+            const nextButton = await this.page.$('[data-testid="statusBarNext"] a');
 
             if (nextButton) {
               const nextHref = await nextButton.getAttribute('href');
@@ -136,7 +138,8 @@ export class BookScraper {
                   : `https://learning.oreilly.com${nextHref}`;
 
                 // Navigate to next chapter to get title
-                await this.page.goto(nextUrl, { waitUntil: 'networkidle' });
+                await this.page.goto(nextUrl, { waitUntil: 'domcontentloaded' });
+                await this.page.waitForSelector('body', { timeout: 10000 });
                 const chapterTitle = await this.page.title();
 
                 chapters.push({
@@ -168,7 +171,7 @@ export class BookScraper {
   async getChapterContent(chapterUrl: string): Promise<string> {
     Logger.info(`Scraping chapter: ${chapterUrl}`);
 
-    await this.page.goto(chapterUrl, { waitUntil: 'networkidle' });
+    await this.page.goto(chapterUrl, { waitUntil: 'domcontentloaded' });
     await delay(getRequestDelay());
 
     try {

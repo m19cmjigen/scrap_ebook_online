@@ -18,7 +18,8 @@
       "Bash(npm run dev:*)",
       "Bash(npm install:*)",
       "Bash(BOOK_URLS_FILE=./books.txt npm run dev:*)",
-      "Bash(BOOK_URLS_FILE=./test-book.txt npm run dev:*)"
+      "Bash(BOOK_URLS_FILE=./test-book.txt npm run dev:*)",
+      "Bash(BOOK_URLS_FILE=./books-unique.txt npm run dev:*)"
     ]
   }
 }

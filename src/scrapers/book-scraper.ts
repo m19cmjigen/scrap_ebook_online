@@ -94,6 +94,8 @@ export class BookScraper {
     try {
       // First, navigate to reading view if we're on the book detail page
       const currentUrl = this.page.url();
+      let baseUrl = '';
+
       if (!currentUrl.includes('.xhtml')) {
         Logger.info('Navigating to reading view...');
         const continueButton = await this.page.$('text=Continue');
@@ -102,6 +104,13 @@ export class BookScraper {
           await this.page.waitForTimeout(2000);
           Logger.info(`Navigated to: ${this.page.url()}`);
         }
+      }
+
+      // Extract base URL from current page
+      const url = this.page.url();
+      const match = url.match(/(.*\/library\/view\/[^\/]+\/[^\/]+\/)/);
+      if (match) {
+        baseUrl = match[1];
       }
 
       // Look for table of contents in reading view
@@ -123,9 +132,9 @@ export class BookScraper {
         }
       }
 
-      if (tocElement) {
-        // Extract all chapter links (O'Reilly uses .xhtml files)
-        const chapterLinks = await tocElement.$$('a[href$=".xhtml"]');
+      if (tocElement && baseUrl) {
+        // Extract all .xhtml links from TOC (front matter, parts, etc.)
+        const chapterLinks = await tocElement.$$('a[href$=".xhtml"]:not([href*="#"])');
 
         for (let i = 0; i < chapterLinks.length; i++) {
           const link = chapterLinks[i];
@@ -137,10 +146,83 @@ export class BookScraper {
             chapters.push({
               title: text.trim(),
               url: fullUrl,
-              index: i,
+              index: chapters.length,
             });
           }
         }
+
+        // Now discover all chapter files (chXX.xhtml) by trying sequential access
+        // This handles cases where TOC is collapsed or doesn't show all chapters
+        Logger.info('Discovering additional chapter files...');
+
+        for (let chNum = 0; chNum <= 30; chNum++) {
+          const chapterFile = `ch${String(chNum).padStart(2, '0')}.xhtml`;
+          const chapterUrl = `${baseUrl}${chapterFile}`;
+
+          // Check if this chapter is already in our list
+          const alreadyExists = chapters.some(ch => ch.url === chapterUrl);
+          if (alreadyExists) {
+            continue;
+          }
+
+          try {
+            // Try to navigate to the chapter
+            const response = await this.page.goto(chapterUrl, {
+              waitUntil: 'domcontentloaded',
+              timeout: 5000
+            });
+
+            if (response && response.status() === 200) {
+              const title = await this.page.title();
+              // Extract chapter title (remove book title suffix)
+              const cleanTitle = title.split('|')[0].trim();
+
+              Logger.info(`Found chapter file: ${chapterFile} - ${cleanTitle}`);
+
+              chapters.push({
+                title: cleanTitle,
+                url: chapterUrl,
+                index: chapters.length,
+              });
+            } else {
+              // Got non-200 response, stop searching
+              break;
+            }
+          } catch (error) {
+            // Chapter doesn't exist or timed out, stop searching
+            break;
+          }
+        }
+
+        // Re-sort chapters by URL to maintain proper order
+        chapters.sort((a, b) => {
+          const getOrder = (url: string) => {
+            if (url.includes('index.xhtml')) return 0;
+            if (url.includes('titlepage.xhtml')) return 1;
+            if (url.includes('front-en.xhtml')) return 2;
+            if (url.includes('copy.xhtml')) return 3;
+            if (url.includes('foreword.xhtml')) return 4;
+            if (url.includes('ch00.xhtml')) return 5;
+            if (url.includes('part01.xhtml')) return 6;
+
+            const chMatch = url.match(/ch(\d+)\.xhtml/);
+            if (chMatch) return 10 + parseInt(chMatch[1], 10);
+
+            if (url.includes('part02.xhtml')) return 100;
+            if (url.includes('part03.xhtml')) return 200;
+            if (url.includes('author.xhtml')) return 300;
+            if (url.includes('colophon.xhtml')) return 301;
+
+            return 999;
+          };
+
+          return getOrder(a.url) - getOrder(b.url);
+        });
+
+        // Re-index after sorting
+        chapters.forEach((ch, idx) => {
+          ch.index = idx;
+        });
       }
 
       // If no chapters found in TOC, try to find chapter navigation

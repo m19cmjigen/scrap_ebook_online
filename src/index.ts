@@ -174,7 +174,7 @@ async function main() {
     await Logger.init(appConfig.logging);
     Logger.info('Scraper starting...');
     Logger.info(`Headless mode: ${userCfg.headless}`);
-    Logger.info(`Books to scrape: ${appConfig.scraper.bookUrls.length}\n`);
+    Logger.info(`Book URL: ${userCfg.bookUrl}\n`);
 
     // 3. Initialize storage components
     const cacheManager = new CacheManager(appConfig.storage.cacheDir);
@@ -191,10 +191,24 @@ async function main() {
     await storageCoordinator.initialize();
     Logger.info('Storage initialized');
 
-    // 4. Initialize progress management
+    // 4. Extract book ID
+    const bookId = sanitizeBookId(userCfg.bookUrl);
+    Logger.info(`Book ID: ${bookId}`);
+
+    // 5. Check if book already scraped
+    const existingEntry = await manifestManager.getBook(bookId);
+    if (existingEntry?.status === 'complete') {
+      Logger.info(`Book already scraped: ${existingEntry.title}`);
+      Logger.info(`PDF location: ${existingEntry.outputPath}`);
+      Logger.info('Use --force flag to re-scrape (not yet implemented)');
+      await Logger.flush();
+      return;
+    }
+
+    // 6. Initialize progress management
     const checkpointManager = new CheckpointManager(appConfig.storage.progressDir);
 
-    // 5. Launch browser and authenticate
+    // 7. Launch browser and authenticate
     Logger.info('Launching browser...');
     const browser = await chromium.launch({
       headless: userCfg.headless,
@@ -217,7 +231,7 @@ async function main() {
         Logger.info('Attempting to load saved session...');
         await auth.loadCookies(userCfg.cookiesPath);
         const page = await auth.getPage();
-        await page.goto(cfg.bookUrl, { waitUntil: 'domcontentloaded' });
+        await page.goto(userCfg.bookUrl, { waitUntil: 'domcontentloaded', timeout: appConfig.scraper.timeout });
         await page.waitForSelector('body', { timeout: 10000 });
         authenticated = await auth.isAuthenticated();
 
@@ -242,51 +256,62 @@ async function main() {
         await auth.saveCookies(userCfg.cookiesPath);
       }
 
-      // 6. Scrape all books
-      const results: BookScrapingResult[] = [];
-      const bookUrls = appConfig.scraper.bookUrls;
+      const page = await auth.getPage();
 
-      for (let i = 0; i < bookUrls.length; i++) {
-        const bookUrl = bookUrls[i];
-        const result = await scrapeBook(
-          bookUrl,
-          i,
-          bookUrls.length,
-          appConfig,
-          storageCoordinator,
-          checkpointManager,
-          auth
-        );
-        results.push(result);
+      // 8. Initialize scraper with validation and config
+      const validator = new ContentValidator();
+      const scraper = new BookScraper(page, validator, appConfig.scraper);
+
+      // 9. Get book metadata
+      Logger.info('Fetching book metadata...');
+      const book = await scraper.getBook(userCfg.bookUrl);
+      Logger.logScrapeStart(bookId, book.title);
+      Logger.info(`Book: ${book.title}`);
+      Logger.info(`Author: ${book.author}`);
+      Logger.info(`Chapters: ${book.chapters.length}`);
+
+      // 10. Initialize progress tracker (resume from checkpoint if exists)
+      const progressTracker = new ProgressTracker(
+        checkpointManager,
+        bookId,
+        userCfg.bookUrl,
+        book.chapters.length
+      );
+      await progressTracker.initialize();
+
+      const remaining = progressTracker.getRemainingChapters();
+      if (remaining.length < book.chapters.length) {
+        Logger.info(`Resuming from checkpoint: ${remaining.length} chapters remaining`);
       }
 
-      // 7. Print summary
-      Logger.info('\n' + '='.repeat(60));
-      Logger.info('📊 Overall Summary');
-      Logger.info('='.repeat(60));
-      Logger.info(`Total books: ${results.length}`);
-      Logger.info(`Successful: ${results.filter(r => r.success).length}`);
-      Logger.info(`Failed: ${results.filter(r => !r.success).length}\n`);
+      // 11. Scrape all chapters with cache and progress management
+      Logger.info('Starting chapter scraping...');
+      const chapterContents = await scraper.scrapeAllChapters(
+        book,
+        progressTracker,
+        cacheManager
+      );
 
-      for (const result of results) {
-        if (result.success) {
-          Logger.info(`✅ ${result.title || result.bookId}`);
-          Logger.info(`   Chapters: ${result.scrapedChapters}/${result.chapterCount}`);
-          Logger.info(`   PDF: ${result.outputPath}`);
-        } else {
-          Logger.error(`❌ ${result.bookUrl}`);
-          Logger.error(`   Error: ${result.error?.message || 'Unknown error'}`);
-        }
-        Logger.info('');
-      }
+      Logger.info(`Successfully scraped ${chapterContents.size}/${book.chapters.length} chapters`);
 
-      Logger.info('Done!');
+      // 12. Save book (PDF generation + manifest update)
+      Logger.info('Saving book...');
+      const manifestEntry = await storageCoordinator.saveBook(page, book, chapterContents);
+
+      Logger.info('✅ Scraping completed successfully!');
+      Logger.info(`Scraped: ${chapterContents.size}/${book.chapters.length} chapters`);
+      Logger.info(`PDF saved: ${manifestEntry.outputPath}`);
+
+      // 13. Finalize progress (delete checkpoint)
+      await progressTracker.finalize();
 
       // Clean up
       await auth.close();
       await browser.close();
+
+      Logger.info('Done!');
     } catch (error) {
-      Logger.error('Fatal error during scraping', error);
+      Logger.error('Scraping failed', error);
       await auth.close();
       await browser.close();
       throw error;

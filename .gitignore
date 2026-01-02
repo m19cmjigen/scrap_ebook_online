@@ -46,3 +46,4 @@ cookies.json
 *.png
 debug-login.ts
 test-login.ts
+debug-book-page.ts

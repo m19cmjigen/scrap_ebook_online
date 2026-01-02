@@ -47,3 +47,7 @@ cookies.json
 debug-login.ts
 test-login.ts
 debug-book-page.ts
+
+# Data and cache
+data/
+logs/

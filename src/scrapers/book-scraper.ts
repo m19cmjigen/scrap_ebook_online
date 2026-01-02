@@ -35,6 +35,7 @@ export class BookScraper {
   async getBook(bookUrl: string): Promise<Book> {
     Logger.info(`Fetching book metadata from: ${bookUrl}`);
 
+
     // Navigate with retry
     await withRetry(
       async () => {
@@ -134,7 +135,11 @@ export class BookScraper {
 
       if (tocElement && baseUrl) {
         // Extract all .xhtml links from TOC (front matter, parts, etc.)
-        const chapterLinks = await tocElement.$$('a[href$=".xhtml"]:not([href*="#"])');
+        // Get all links that end with .xhtml
+        const chapterLinks = await tocElement.$$('a[href*=".xhtml"]');
+
+        // Track unique chapter URLs (without anchors)
+        const seenUrls = new Set<string>();
 
         for (let i = 0; i < chapterLinks.length; i++) {
           const link = chapterLinks[i];
@@ -142,7 +147,24 @@ export class BookScraper {
           const text = await link.textContent();
 
           if (href && text) {
-            const fullUrl = href.startsWith('http') ? href : `https://learning.oreilly.com${href}`;
+            // Remove anchor from URL (everything after #)
+            const urlWithoutAnchor = href.split('#')[0];
+
+            // Skip if this is just an anchor (no file part)
+            if (!urlWithoutAnchor || !urlWithoutAnchor.includes('.xhtml')) {
+              continue;
+            }
+
+            const fullUrl = urlWithoutAnchor.startsWith('http')
+              ? urlWithoutAnchor
+              : `https://learning.oreilly.com${urlWithoutAnchor}`;
+
+            // Skip duplicates
+            if (seenUrls.has(fullUrl)) {
+              continue;
+            }
+            seenUrls.add(fullUrl);
+
             chapters.push({
               title: text.trim(),
               url: fullUrl,
@@ -238,13 +260,14 @@ export class BookScraper {
             index: 0,
           });
 
-          // Try to find next chapter links
+          // Try to find next chapter links using O'Reilly's status bar navigation
           let hasNext = true;
           let index = 1;
 
           while (hasNext && index < 1000) {
             // Safety limit
-            const nextButton = await this.page.$('[data-testid="statusBarNext"] a, a[aria-label="Next"], a[title="Next"], .next-chapter');
+            // O'Reilly uses data-testid="statusBarNext" for next navigation
+            const nextButton = await this.page.$('[data-testid="statusBarNext"] a');
 
             if (nextButton) {
               const nextHref = await nextButton.getAttribute('href');
@@ -297,6 +320,7 @@ export class BookScraper {
 
   async getChapterContent(chapterUrl: string, chapterTitle: string): Promise<string> {
     Logger.info(`Scraping chapter: ${chapterUrl}`);
+
 
     // Navigate with retry
     await withRetry(

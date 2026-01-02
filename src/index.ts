@@ -20,7 +20,6 @@ config();
 interface UserConfig {
   email: string;
   password: string;
-  bookUrl: string;
   outputDir: string;
   headless: boolean;
   cookiesPath: string;
@@ -29,7 +28,6 @@ interface UserConfig {
 function getUserConfig(): UserConfig {
   const email = process.env.OREILLY_EMAIL;
   const password = process.env.OREILLY_PASSWORD;
-  const bookUrl = process.env.BOOK_URL || process.argv[2];
   const outputDir = process.env.OUTPUT_DIR || './downloads';
   const headless = process.env.HEADLESS !== 'false';
   const cookiesPath = process.env.COOKIES_PATH || './session/cookies.json';
@@ -38,23 +36,134 @@ function getUserConfig(): UserConfig {
     throw new Error('OREILLY_EMAIL and OREILLY_PASSWORD must be set in .env file');
   }
 
-  if (!bookUrl) {
-    throw new Error('BOOK_URL must be set in .env file or provided as command line argument');
-  }
-
   return {
     email,
     password,
-    bookUrl,
     outputDir,
     headless,
     cookiesPath,
   };
 }
 
+interface BookScrapingResult {
+  bookUrl: string;
+  bookId: string;
+  success: boolean;
+  title?: string;
+  outputPath?: string;
+  error?: Error;
+  chapterCount?: number;
+  scrapedChapters?: number;
+}
+
+/**
+ * Scrape a single book
+ */
+async function scrapeBook(
+  bookUrl: string,
+  bookIndex: number,
+  totalBooks: number,
+  appConfig: ReturnType<typeof loadConfig>,
+  storageCoordinator: StorageCoordinator,
+  checkpointManager: CheckpointManager,
+  auth: OReillyAuth
+): Promise<BookScrapingResult> {
+  const bookId = sanitizeBookId(bookUrl);
+  const result: BookScrapingResult = {
+    bookUrl,
+    bookId,
+    success: false,
+  };
+
+  try {
+    Logger.info(`\n${'='.repeat(60)}`);
+    Logger.info(`📚 Book ${bookIndex + 1}/${totalBooks}`);
+    Logger.info(`URL: ${bookUrl}`);
+    Logger.info(`${'='.repeat(60)}\n`);
+
+    // Check if book already scraped
+    const manifestManager = new ManifestManager(
+      path.join(appConfig.storage.dataDir, 'manifest.json')
+    );
+    const existingEntry = await manifestManager.getBook(bookId);
+    if (existingEntry?.status === 'complete') {
+      Logger.info(`✓ Book already scraped: ${existingEntry.title}`);
+      Logger.info(`  PDF location: ${existingEntry.outputPath}`);
+      result.success = true;
+      result.title = existingEntry.title;
+      result.outputPath = existingEntry.outputPath;
+      result.chapterCount = existingEntry.chapterCount;
+      result.scrapedChapters = existingEntry.chapterCount;
+      return result;
+    }
+
+    const page = await auth.getPage();
+
+    // Initialize scraper with validation and config
+    const validator = new ContentValidator();
+    const scraper = new BookScraper(page, validator, appConfig.scraper);
+
+    // Get book metadata
+    Logger.info('Fetching book metadata...');
+    const book = await scraper.getBook(bookUrl);
+    Logger.logScrapeStart(bookId, book.title);
+    Logger.info(`Book: ${book.title}`);
+    Logger.info(`Author: ${book.author}`);
+    Logger.info(`Chapters: ${book.chapters.length}`);
+
+    result.title = book.title;
+    result.chapterCount = book.chapters.length;
+
+    // Initialize progress tracker (resume from checkpoint if exists)
+    const progressTracker = new ProgressTracker(
+      checkpointManager,
+      bookId,
+      bookUrl,
+      book.chapters.length
+    );
+    await progressTracker.initialize();
+
+    const remaining = progressTracker.getRemainingChapters();
+    if (remaining.length < book.chapters.length) {
+      Logger.info(`Resuming from checkpoint: ${remaining.length} chapters remaining`);
+    }
+
+    // Scrape all chapters with cache and progress management
+    Logger.info('Starting chapter scraping...');
+    const chapterContents = await scraper.scrapeAllChapters(
+      book,
+      progressTracker,
+      new CacheManager(appConfig.storage.cacheDir)
+    );
+
+    Logger.info(`Successfully scraped ${chapterContents.size}/${book.chapters.length} chapters`);
+    result.scrapedChapters = chapterContents.size;
+
+    // Save book (PDF generation + manifest update)
+    Logger.info('Saving book...');
+    const manifestEntry = await storageCoordinator.saveBook(page, book, chapterContents);
+
+    Logger.info('✅ Scraping completed successfully!');
+    Logger.info(`Scraped: ${chapterContents.size}/${book.chapters.length} chapters`);
+    Logger.info(`PDF saved: ${manifestEntry.outputPath}`);
+
+    result.success = true;
+    result.outputPath = manifestEntry.outputPath;
+
+    // Finalize progress (delete checkpoint)
+    await progressTracker.finalize();
+
+    return result;
+  } catch (error) {
+    Logger.error(`Failed to scrape book ${bookIndex + 1}/${totalBooks}:`, error);
+    result.error = error as Error;
+    return result;
+  }
+}
+
 async function main() {
-  console.log('O\'Reilly Ebook Scraper');
-  console.log('======================\n');
+  console.log('O\'Reilly Ebook Scraper - Multi-Book Edition');
+  console.log('============================================\n');
 
   try {
     // 1. Load configurations

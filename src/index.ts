@@ -217,8 +217,7 @@ async function main() {
         Logger.info('Attempting to load saved session...');
         await auth.loadCookies(userCfg.cookiesPath);
         const page = await auth.getPage();
-        // Test authentication with first book URL
-        await page.goto(appConfig.scraper.bookUrls[0], { waitUntil: 'domcontentloaded', timeout: appConfig.scraper.timeout });
+        await page.goto(cfg.bookUrl, { waitUntil: 'domcontentloaded' });
         await page.waitForSelector('body', { timeout: 10000 });
         authenticated = await auth.isAuthenticated();
 

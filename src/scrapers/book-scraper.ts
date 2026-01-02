@@ -35,6 +35,7 @@ export class BookScraper {
   async getBook(bookUrl: string): Promise<Book> {
     Logger.info(`Fetching book metadata from: ${bookUrl}`);
 
+
     // Navigate with retry
     await withRetry(
       async () => {
@@ -259,13 +260,14 @@ export class BookScraper {
             index: 0,
           });
 
-          // Try to find next chapter links
+          // Try to find next chapter links using O'Reilly's status bar navigation
           let hasNext = true;
           let index = 1;
 
           while (hasNext && index < 1000) {
             // Safety limit
-            const nextButton = await this.page.$('[data-testid="statusBarNext"] a, a[aria-label="Next"], a[title="Next"], .next-chapter');
+            // O'Reilly uses data-testid="statusBarNext" for next navigation
+            const nextButton = await this.page.$('[data-testid="statusBarNext"] a');
 
             if (nextButton) {
               const nextHref = await nextButton.getAttribute('href');
@@ -318,6 +320,7 @@ export class BookScraper {
 
   async getChapterContent(chapterUrl: string, chapterTitle: string): Promise<string> {
     Logger.info(`Scraping chapter: ${chapterUrl}`);
+
 
     // Navigate with retry
     await withRetry(

@@ -4,6 +4,7 @@ import path from 'path';
 import { PDFDocument } from 'pdf-lib';
 import { Logger } from '../utils/logger.js';
 import { Book, Chapter } from '../scrapers/book-scraper.js';
+import { sanitizeFilename } from '../utils/sanitize.js';
 
 export interface PDFOptions {
   outputPath: string;
@@ -86,13 +87,9 @@ export class PDFGenerator {
     // Ensure output directory exists
     await fs.mkdir(outputDir, { recursive: true });
 
-    // Create a sanitized filename
-    const sanitizedTitle = book.title
-      .replace(/[^a-z0-9]/gi, '_')
-      .replace(/_+/g, '_')
-      .toLowerCase();
-    const timestamp = new Date().toISOString().split('T')[0];
-    const filename = `${sanitizedTitle}_${timestamp}.pdf`;
+    // Create a sanitized filename based on book title
+    const sanitizedTitle = sanitizeFilename(book.title);
+    const filename = `${sanitizedTitle}.pdf`;
     const outputPath = path.join(outputDir, filename);
 
     // Generate PDF by navigating to each chapter page directly

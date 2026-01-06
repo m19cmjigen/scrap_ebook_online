@@ -3,8 +3,8 @@
  * Removes or replaces invalid filename characters
  */
 export function sanitizeFilename(input: string): string {
-  // Remove invalid filename characters: / \ : * ? " < > |
-  let sanitized = input.replace(/[/\\:*?"<>|]/g, '_');
+  // Remove invalid filename characters: / \ : * ? " < > | and replace spaces with underscores
+  let sanitized = input.replace(/[/\\:*?"<>|\s]/g, '_');
 
   // Collapse multiple underscores/hyphens into single
   sanitized = sanitized.replace(/_{2,}/g, '_').replace(/-{2,}/g, '-');
